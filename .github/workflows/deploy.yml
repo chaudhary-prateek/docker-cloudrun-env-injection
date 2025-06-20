@@ -1,0 +1,61 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  SERVICE_NAME: myservice
+  REGION: us-central1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout code
+        uses: actions/checkout@v3
+
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: 🛠️ Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 📥 Download common .env from Secret Manager
+        run: |
+          gcloud secrets versions access latest --secret="env-common" > common.env
+
+      - name: 📥 Download service-specific .env from Secret Manager
+        run: |
+          gcloud secrets versions access latest --secret="env-${{ env.SERVICE_NAME }}" > service.env
+
+      - name: 🧬 Merge env files
+        run: |
+          cat common.env service.env > .env
+          echo "Combined .env:"
+          cat .env
+
+      - name: 🐳 Build Docker image (optional build-time env usage)
+        run: |
+          docker build \
+            --build-arg NODE_ENV=production \
+            -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest .
+
+      - name: 📤 Push to Container Registry
+        run: |
+          gcloud auth configure-docker
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest
+
+      - name: 🚀 Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --env-vars-file .env
